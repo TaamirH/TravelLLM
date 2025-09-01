@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Travel Assistant</title>
+  <style>
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      margin: 20px; 
+      background-color: #f5f5f5;
+    }
+    
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    
+    .header {
+      background: #2563eb;
+      color: white;
+      padding: 20px;
+      text-align: center;
+    }
+    
+    #chat { 
+      height: 400px; 
+      overflow-y: auto; 
+      padding: 20px;
+      background: white;
+    }
+    
+    .msg { 
+      margin: 15px 0; 
+      padding: 12px;
+      border-radius: 8px;
+      line-height: 1.5;
+    }
+    
+    .user { 
+      background-color: #dbeafe; 
+      color: #1e40af;
+      margin-left: 50px;
+    }
+    
+    .assistant { 
+      background-color: #f0fdf4; 
+      color: #166534;
+      margin-right: 50px;
+      white-space: pre-line; /* Preserves line breaks */
+    }
+    
+    .input-area {
+      padding: 20px;
+      background: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      gap: 10px;
+    }
+    
+    #input { 
+      flex: 1;
+      padding: 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    
+    button {
+      padding: 12px 24px;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    
+    button:hover {
+      background: #1d4ed8;
+    }
+    
+    .loading {
+      opacity: 0.6;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🧳 TravelGenie Assistant</h1>
+      <p>Your AI travel planning companion</p>
+    </div>
+    
+    <div id="chat"></div>
+    
+    <div class="input-area">
+      <input id="input" type="text" placeholder="Ask me about destinations, packing, or local attractions..." />
+      <button onclick="send()">Send</button>
+    </div>
+  </div>
+
+  <script>
+    let isLoading = false;
+    
+    async function send() {
+      if (isLoading) return;
+      
+      const input = document.getElementById("input");
+      const msg = input.value.trim();
+      if (!msg) return;
+      
+      input.value = "";
+      addMsg("user", msg);
+      
+      isLoading = true;
+      addMsg("assistant", "🤔 Planning your perfect trip...", true);
+      
+      try {
+        const startTime = Date.now();
+        const res = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg, conversation_id: "demo" })
+        });
+        
+        const data = await res.json();
+        const responseTime = ((Date.now() - startTime) / 1000).toFixed(1);
+        
+        // Remove loading message
+        const messages = document.querySelectorAll('.msg.assistant');
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.classList.contains('loading')) {
+          lastMsg.remove();
+        }
+        
+        addMsg("assistant", `${data.reply}\n\n⏱️ Response time: ${responseTime}s`);
+        
+      } catch (error) {
+        const messages = document.querySelectorAll('.msg.assistant');
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.classList.contains('loading')) {
+          lastMsg.remove();
+        }
+        addMsg("assistant", "❌ Sorry, something went wrong. Please try again.");
+      }
+      
+      isLoading = false;
+    }
+    
+    function addMsg(role, text, isLoading = false) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}${isLoading ? ' loading' : ''}`;
+      
+      const label = role === "user" ? "YOU" : "TRAVELGENIE";
+      div.innerHTML = `<strong>${label}:</strong><br>${text}`;
+      
+      document.getElementById("chat").appendChild(div);
+      div.scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    // Allow Enter key to send
+    document.getElementById("input").addEventListener("keypress", function(e) {
+      if (e.key === "Enter") {
+        send();
+      }
+    });
+    
+    // Add welcome message
+    addMsg("assistant", "Hello! I'm TravelGenie, your AI travel planning assistant.\n\nI can help you with:\n• Destination recommendations\n• Packing advice based on weather\n• Local attractions and activities\n• Trip planning and itineraries\n\nWhat's your next adventure?");
+  </script>
+</body>
+</html>
