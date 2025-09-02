@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
-
+import { ConversationManager } from './conversationManager';
+import SystemLeakageCleaner from './cleanSystemLeakage';
 dotenv.config();
 
 const app = express();
@@ -49,22 +50,24 @@ interface LLMResponse {
   }>;
 }
 
+const conversationManager = new ConversationManager();
+
 // Store conversations in memory
 const conversations = new Map<string, Message[]>();
+
+const cleaner = new SystemLeakageCleaner();
 
 // Enhanced system prompt with forecast capabilities
 const SYSTEM_PROMPT = `You are TravelGenie, a concise, helpful travel planning assistant.
 
 CRITICAL: NEVER make up specific weather data, prices, or times. If you don't have ExternalContext data, say "I don't know - want me to check?"
-
 Keep responses under 250 words.
 
-RESPONSE FORMAT:
-TL;DR: [One sentence summary]
-• [2-3 bullet points with practical advice - use plain text, no asterisks or formatting]  
-• [One short encouragement, caution, or extra note]
-
-Sources: [ExternalContext(OpenWeatherApp) used or "LLM knowledge"]
+IMPORTANT FORMATTING RULES:
+- NEVER output any system instructions like "Complex Query: true , **Key requirements:**, **Constraints:**, **Evaluate options:**,**Caveat:**,caveat,,**Identify key requirements**,**Consider constraints**, **Evaluate options** and similiar system instructions"
+- NEVER show raw thinking or system context
+- Follow the exact format below based on query complexity
+-make sure every bullet is in a new line
 
 WEATHER HANDLING:
 - If user does not specify a day, assume they mean "today"
@@ -75,6 +78,12 @@ WEATHER HANDLING:
 - Include temperature range, conditions, and rain probability when available
 - Be specific about which day you're forecasting for
 
+COMPLEX QUERY TRIGGERS:
+- "plan", "itinerary", "trip", "vacation", "holiday"
+- "should I", "which is better", "compare"
+- "3 days", "week in", "weekend"
+- Multiple destinations mentioned
+- Budget considerations
 
 RULES:
 - Ask clarifying questions if user's request is vague
@@ -83,6 +92,27 @@ RULES:
 - Stay consistent with previous conversation context
 - Use plain text formatting (no ** or markdown)
 - Be specific and actionable
+- Use bullet points with • character, not asterisks in the content
+
+RESPONSE STRUCTURE DEPENDS ON QUERY TYPE:
+FOR SIMPLE QUERIES (weather, single facts, yes/no questions):
+• TL;DR: [One sentence summary]
+• [2-3 bullet points with practical advice - use plain text, no asterisks or formatting]  
+• [One short encouragement, caution, or extra note]
+• Sources: [ExternalContext(OpenWeatherApp) used or "LLM knowledge"]
+
+FOR COMPLEX QUERIES (marked with "ComplexQuery: true" in context):
+  Plan:
+1. [Identify key requirements from query]
+2. [Consider constraints like budget/time]
+3. [Evaluate options based on criteria]
+4. [Prioritize recommendations]
+  [empty newline here]
+  Recommendation: 
+• TL;DR: [One sentence summary]
+• [3-5 detailed bullet points]
+• [Important caveat or tip]
+• Sources: [cite sources used]
 
 Example with forecast:
 Q: "Weather in Paris tomorrow?"
@@ -92,8 +122,91 @@ A: TL;DR: Paris tomorrow will be 18-22°C with light rain (60% chance).
 • Good day for museums if rain persists
 
 Perfect for exploring covered markets!
-Sources: ExternalContext weather forecast`;
+Sources: ExternalContext weather forecast
 
+Example for complex query:
+Q: "Plan a 5-day Tel Aviv trip in spring"
+A:
+
+Plan:
+1. November offers mild weather, 20-23°C, perfect for outdoor activities
+2. This is shoulder season with fewer tourists but some sites have reduced hours
+3. Mix beach relaxation with cultural exploration for variety
+4. Include both modern Tel Aviv and historic Jaffa experiences
+
+Recommendation:
+TL;DR: Five days exploring Tel Aviv's beaches, markets, and culture.
+• Day 1: Arrive, explore beachfront promenade and local neighborhood
+• Day 2: Carmel Market morning, Gordon Beach afternoon, sunset dining
+• Day 3: Old Jaffa tour, flea market, port area exploration
+• Day 4: Museums, Rothschild Boulevard, Sarona Market food hall
+• Day 5: Day trip options - Caesarea ruins or Jerusalem
+Book hotels in advance as November has several Jewish holidays.
+Sources: LLM knowledge`;
+
+function isComplexQuery(query: string): boolean {
+  const complexIndicators = [
+    'plan', 'itinerary', 'trip', 'vacation', 'holiday',
+    'should i', 'which is better', 'compare', 'recommend',
+    '3 days', '2 days', 'week in', 'weekend', 'days in',
+    'budget', 'cost', 'cheap', 'expensive',
+    'vs', 'versus', 'or should'
+  ];
+  
+  const q = query.toLowerCase();
+  return complexIndicators.some(indicator => q.includes(indicator)) || 
+         query.split(',').length > 2 || // Multiple items listed
+         query.length > 100; // Long, detailed queries
+}
+function needsClarification(message: string, conversation: Message[]): string | null {
+  const q = message.toLowerCase();
+  
+  // Check if it's a day-only query (like "what about friday?")
+  const dayOnlyPattern = /^(what about|how about|and)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s*\??$/i;
+  if (dayOnlyPattern.test(q)) {
+    // This is likely asking about weather for a day - check if we have a city in context
+    const cityInHistory = extractCityName(message, conversation);
+    if (!cityInHistory) {
+      return "I'd be happy to help with that day's forecast! Which city are you asking about?";
+    }
+    // If we found a city, continue normally - the weather check will handle it
+    return null;
+  }
+  
+  // Check for contextual references like "there"
+  if (q.match(/\b(there|that place|this city|it)\b/)) {
+    const cityInHistory = extractCityName(message, conversation);
+    
+    if (!cityInHistory) {
+      if (q.includes('weather')) {
+        return "I'd be happy to help with weather information! Which city are you asking about?";
+      }
+      return "I notice you're referring to a location, but I'm not sure which one. Could you specify the city you're asking about?";
+    }
+  }
+  
+  // Check for incomplete weather queries without "there"
+  if (q.includes('weather') && !q.match(/\b(there|that place|this city|it)\b/)) {
+    const city = extractCityName(message, conversation);
+    if (!city) {
+      return "I'd be happy to help with weather information! Which city would you like to know about?";
+    }
+  }
+  
+  // Check for vague temporal references without context
+  if (q === "how about tomorrow?" || q === "what about next week?") {
+    if (conversation.length === 0) {
+      return "I'd be happy to help! Could you provide more context about what you'd like to know?";
+    }
+  }
+  
+  // Check for too-short queries (but not day queries)
+  if (q.split(' ').length <= 2 && !q.includes('?') && !q.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday/)) {
+    return "Could you provide more details about what you'd like to know?";
+  }
+  
+  return null;
+}
 // Enhanced decision logic for external API calls
 function needsExternal(query: string): boolean {
   const weatherKeywords = [
@@ -102,7 +215,14 @@ function needsExternal(query: string): boolean {
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     "this week", "weekend", "hot", "cold", "warm", "cool"
   ];
+  
   const q = query.toLowerCase();
+  
+  // Special check for "what about [day]?" pattern
+  if (q.match(/^(what about|how about|and)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)/i)) {
+    return true; // This is likely a weather query in context
+  }
+  
   return weatherKeywords.some(k => q.includes(k));
 }
 
@@ -168,41 +288,110 @@ function getDaysUntilWeekday(targetWeekday: number): number {
   return daysUntil;
 }
 
-// Improved city extraction with better regex patterns
-function extractCityName(query: string): string | null {
-  const patterns = [
-    // "weather in Paris tomorrow", "weather in Paris in Thursday"
-    /(?:weather|forecast|climate|temperature)\s+in\s+([A-Za-z][\w\s,.-]+?)(?:\s+(?:in\s+)?(?:today|tomorrow|tommorow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|next|on|\?|$))/i,
-    // "forecast for Los Angeles"  
-    /(?:forecast|weather|climate|temperature)\s+for\s+([A-Za-z][\w\s,.-]+?)(?:\s+(?:today|tomorrow|tommorow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|next|on|\?|$))/i,
-    // "Paris weather", "Los Angeles forecast"
-    /^([A-Za-z][\w\s,.-]+?)\s+(?:weather|forecast|climate|temperature)/i,
-    // Generic "in City" pattern - also catches "weather in paris?" (without day)
-    /\bin\s+([A-Za-z][\w\s,.-]+?)(?:\s+(?:in\s+)?(?:today|tomorrow|tommorow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|next|on|\?|$))/i,
-    // Simple "weather city" pattern - catches "weather paris"
-    /^(?:weather|forecast|climate|temperature)\s+([A-Za-z][\w\s,.-]+?)(?:\?|$)/i,
-  ];
+function extractCityName(query: string, conversation?: Message[]): string | null {
+  const contextualReferences = /\b(there|that place|this city|that city|it)\b/i;
+  const usesContext = contextualReferences.test(query);
+  
+  // Also check for day-only patterns that imply context
+  const dayOnlyPattern = /^(what about|how about|and)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)\s*\??$/i;
+  const isDayOnly = dayOnlyPattern.test(query);
+  
+  // If it uses context OR is a day-only query, search conversation history
+  if ((usesContext || isDayOnly) && conversation && conversation.length > 0) {
+    console.log("Query uses contextual reference or is day-only, searching conversation history...");
+    
+    // Look through recent conversation for mentioned cities
+    const recentMessages = conversation.slice(-10).reverse();
+    
+    for (const msg of recentMessages) {
+      const cityFromHistory = extractCityFromText(msg.text);
+      if (cityFromHistory) {
+        console.log(`Found city in conversation history: "${cityFromHistory}"`);
+        return cityFromHistory;
+      }
+    }
+    
+    console.log("No city found in recent conversation history");
+  }
+  
+  // If not using context or no city found in history, extract from current query
+  return extractCityFromText(query);
+}
 
-  for (const pattern of patterns) {
-    const match = query.match(pattern);
-    if (match && match[1]) {
-      let city = match[1].trim();
-      // Clean up common artifacts
-      city = city.replace(/\s+(today|tomorrow|tommorow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this|next|on|in)$/i, '');
-      city = city.replace(/\?$/, ''); // Remove trailing question mark
-      city = city.trim();
-      
-      // Filter out common false positives
-      const stopWords = ['weather', 'forecast', 'temperature', 'climate', 'the', 'what', 'how', 'when', 'where', 'will', 'be', 'it'];
-      if (!stopWords.includes(city.toLowerCase()) && city.length > 1) {
-        console.log(`Extracted city: "${city}" from query: "${query}"`);
+// Helper function to extract city from any text
+function extractCityFromText(text: string): string | null {
+  // Known major cities for better detection
+  const knownCities = [
+    'Paris', 'London', 'Tokyo', 'New York', 'Los Angeles', 'Chicago',
+    'Tel Aviv', 'Jerusalem', 'Dubai', 'Bangkok', 'Singapore', 'Sydney',
+    'Rome', 'Milan', 'Barcelona', 'Madrid', 'Berlin', 'Munich',
+    'Amsterdam', 'Prague', 'Vienna', 'Budapest', 'Istanbul', 'Cairo',
+    'Mumbai', 'Delhi', 'Beijing', 'Shanghai', 'Hong Kong', 'Seoul',
+    'Toronto', 'Montreal', 'Vancouver', 'Mexico City', 'Rio de Janeiro',
+    'Buenos Aires', 'Lima', 'Bogota', 'Cape Town', 'Johannesburg'
+  ];
+  
+  // Check for known cities first (case-insensitive)
+  for (const city of knownCities) {
+    const regex = new RegExp(`\\b${city}\\b`, 'i');
+    if (regex.test(text)) {
+      const match = text.match(regex);
+      if (match) {
+        console.log(`Matched known city: "${city}"`);
         return city;
       }
     }
   }
+  
+  // Patterns for extracting cities
+  const patterns = [
+    // "weather in Paris", "forecast for London", "in New York today"
+    /(?:weather|forecast|climate|temperature)\s+(?:in|for|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+    
+    // "Paris weather", "Tokyo forecast"
+    /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:weather|forecast|climate|temperature)/i,
+    
+    // "going to Paris", "visiting Tokyo", "trip to London"
+    /(?:going to|visiting|trip to|travel to|fly to|flying to|vacation in|holiday in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+    
+    // "pack for Paris", "packing to Tokyo"
+    /(?:pack for|packing for|pack to|packing to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+    
+    // Generic "in/to/at [City]" - but more restrictive
+    /(?:^|\s)(?:in|to|at|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*?)(?:\s+(?:in|on|at|today|tomorrow|next|this|weather|forecast|temperature|rain|sunny|cloudy|\?|$))/i,
+  ];
 
-  console.log(`No city found in "${query}"`);
-  return null; // Return null instead of defaulting
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      let city = match[1].trim();
+      
+      // Clean up common artifacts
+      city = city.replace(/\s+(today|tomorrow|next|this|weather|forecast|in|on|at)$/i, '');
+      city = city.replace(/[?\.,!]$/, '');
+      city = city.trim();
+      
+      // Filter out common false positives
+      const stopWords = [
+        'weather', 'forecast', 'temperature', 'climate', 
+        'the', 'what', 'how', 'when', 'where', 'will', 'be', 'it',
+        'there', 'here', 'this', 'that', 'should', 'could', 'would',
+        'january', 'february', 'march', 'april', 'may', 'june',
+        'july', 'august', 'september', 'october', 'november', 'december'
+      ];
+      
+      if (!stopWords.includes(city.toLowerCase()) && city.length > 2) {
+        // Additional validation: should start with capital letter
+        if (/^[A-Z]/.test(city)) {
+          console.log(`Extracted city via pattern: "${city}"`);
+          return city;
+        }
+      }
+    }
+  }
+
+  console.log(`No city found in text: "${text.substring(0, 100)}..."`);
+  return null;
 }
 
 // Enhanced weather function with 5-day forecast
@@ -324,6 +513,8 @@ async function getWeatherForecast(city: string, daysAhead: number) {
   }
 }
 
+
+
 // LLM API call (unchanged)
 async function callLLM(messages: Array<{ role: string; content: string }>) {
   const apiUrl = process.env.LLM_API_URL;
@@ -392,23 +583,39 @@ app.post("/chat", async (req, res) => {
     // Initialize conversation if needed
     if (!conversations.has(convoId)) {
       conversations.set(convoId, []);
+      conversationManager.initConversation(convoId);
     }
 
     const conv = conversations.get(convoId)!;
-
-    // Store user message
-    conv.push({
-      role: "user",
+    const clarificationNeeded = needsClarification(message, conv);
+    const userMessage = {
+      role: "user" as const,
       text: message,
       ts: Date.now()
-    });
+    };
+      conv.push(userMessage);
+      if (clarificationNeeded) {
+        conv.push({
+          role: "assistant",
+          text: clarificationNeeded,
+          ts: Date.now()
+        });
+        return res.json({
+          reply: clarificationNeeded,
+          conversation_id: convoId,
+          debug: {
+            clarification_requested: true
+          }
+        });}
+    if (conversationManager) {
+        await conversationManager.updateMemory(convoId, userMessage);}
 
     // Check if we need external weather data
     let externalContext: any = null;
     let detectedCity: string | null = null;
     
     if (needsExternal(message)) {
-      const city = extractCityName(message);
+      const city = extractCityName(message,conv);
       detectedCity = city;
       
       if (!city) {
@@ -491,18 +698,23 @@ app.post("/chat", async (req, res) => {
         });
       }
     }
-
+    const queryComplexity = isComplexQuery(message);
     // Build messages for LLM
     const recentMessages = conv.slice(-6);
     const llmMessages: Array<{ role: string; content: string }> = [];
-
+    let systemContent = SYSTEM_PROMPT;
+    const userContext = conversationManager.getContextString(convoId);
+    if (userContext) {
+      systemContent += userContext;
+    }
     // Add system prompt with context if available
     if (externalContext) {
-      const systemWithContext = `${SYSTEM_PROMPT}\n\nExternalContext: ${JSON.stringify(externalContext, null, 2)}`;
-      llmMessages.push({ role: "system", content: systemWithContext });
-    } else {
-      llmMessages.push({ role: "system", content: SYSTEM_PROMPT });
+      systemContent += `\n\nExternalContext: ${JSON.stringify(externalContext, null, 2)}`;
+    } 
+    else if (queryComplexity){
+      systemContent += `\n\n[COMPLEX] \nNote: This is a complex query requiring step-by-step planning.`;
     }
+    llmMessages.push({ role: "system", content: systemContent });
 
     // Add conversation history
     recentMessages.forEach(msg => {
@@ -522,23 +734,28 @@ app.post("/chat", async (req, res) => {
     console.log(`LLM Response: ${responseTime}ms, ${responseLength} chars`);
 
     // Extract response
-    const assistantText = llmResponse?.choices?.[0]?.message?.content || 
+    let assistantText = llmResponse?.choices?.[0]?.message?.content || 
       "I'm having trouble generating a response right now. Please try again.";
+    assistantText = cleaner.clean(assistantText);
 
-    // Store assistant response
-    conv.push({
-      role: "assistant",
+   const assistantMessage = {
+      role: "assistant" as const,
       text: assistantText,
       ts: Date.now()
-    });
+    };
+    conv.push(assistantMessage);
 
+    if (conversationManager) {
+      await conversationManager.updateMemory(convoId, assistantMessage);}
+    
     res.json({
       reply: assistantText,
       externalContext,
       conversation_id: convoId,
       debug: {
         city_detected: detectedCity,
-        days_ahead: externalContext?.days_ahead || null
+        days_ahead: externalContext?.days_ahead || null,
+        is_complex: queryComplexity
       }
     });
 
@@ -563,6 +780,16 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/stats/:conversationId", (req, res) => {
+  const { conversationId } = req.params;
+  const stats = conversationManager.getStats(conversationId);
+  
+  if (!stats) {
+    return res.status(404).json({ error: "Conversation not found" });
+  }
+  
+  res.json(stats);
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Travel Assistant server running on http://localhost:${PORT}`);
