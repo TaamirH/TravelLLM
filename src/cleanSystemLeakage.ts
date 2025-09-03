@@ -31,44 +31,46 @@ class SystemLeakageCleaner {
       cleaned = cleaned.replace(pattern, '');
     });
     
-    // Remove all ** formatting
+   // Remove all ** formatting
     cleaned = cleaned.replace(/\*\*/g, '');
     
     // Fix any double colons or spaces
     cleaned = cleaned.replace(/:\s*:/g, ':');
-    cleaned = cleaned.replace(/\s{2,}/g, ' ');
     
-    // Clean up numbered lists that have meta-labels
+    // Clean up numbered lists that have meta-labels (: after number)
     cleaned = cleaned.replace(/(\d+\.)\s*:\s*/g, '$1 ');
     
-    // Remove [COMPLEX] markers
-    cleaned = cleaned.replace(/\[COMPLEX\]/gi, '');
-
-    // Fix numbered list formatting in Plan section
-    cleaned = cleaned.replace(/Plan:\s*(\d+\.)/g, 'Plan:\n$1');
-    cleaned = cleaned.replace(/(\d+\.)\s*/g, '\n$1 ');
-
-     // Fix TL;DR to be on same line as Recommendation
-    cleaned = cleaned.replace(/Recommendation:\s*\n*TL;DR:/g, '\nRecommendation:\nTL;DR:');
+    // IMPORTANT: Fix Plan section formatting WITHOUT removing content
+    // First, ensure Plan: is on its own line
+    cleaned = cleaned.replace(/([^\n])\s*Plan:/g, '$1\n\nPlan:');
     
-    // Fix Plan: and Recommendation: formatting
-    cleaned = cleaned.replace(/^\s*Plan:\s*$/gm, 'Plan:');
-    cleaned = cleaned.replace(/^\s*Recommendation:\s*$/gm, '\nRecommendation:');
-
-      // Ensure bullet points are on new lines
-    //cleaned = cleaned.replace(/([.!?])\s*•/g, '$1\n•');
-    //cleaned = cleaned.replace(/•/g, '\n•');
-    cleaned = cleaned.replace(/\s*•/g, '\n•');
-
-
-     // Fix Sources to be on new line
+    // Then, fix numbered items to be on separate lines
+    // Match "Plan: 1. text 2. text" and convert to proper line breaks
+    cleaned = cleaned.replace(/Plan:\s*(\d+\.)/g, 'Plan:\n$1');
+    
+    // Fix subsequent numbered items (but preserve their content!)
+    // This regex looks for "text. 2." pattern and adds newline before the number
+    cleaned = cleaned.replace(/([^0-9])\s+(\d+\.)\s+/g, '$1\n$2 ');
+    
+    // Fix Recommendation section
+    // Ensure Recommendation appears on new line after Plan content
+    cleaned = cleaned.replace(/([^\n])\s*Recommendation:/g, '$1\n\nRecommendation:');
+    
+    // Fix TL;DR to be right after Recommendation
+    cleaned = cleaned.replace(/Recommendation:\s*\n*\s*TL;DR:/g, 'Recommendation:\nTL;DR:');
+    
+    // Ensure bullet points are on new lines (but preserve content)
+    cleaned = cleaned.replace(/([^\n])\s*•/g, '$1\n•');
+    
+    // Fix Sources to be on new line
     cleaned = cleaned.replace(/([^\n])\s*Sources:/g, '$1\n\nSources:');
     
-      // Collapse multiple newlines to max 2
-    cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
-
-    // Clean up extra whitespace
-    cleaned = cleaned.replace(/[ \t]+$/gm, '');
+    // Clean up excessive whitespace
+    cleaned = cleaned.replace(/\s{3,}/g, '  '); // Replace 3+ spaces with 2
+    cleaned = cleaned.replace(/\n{3,}/g, '\n\n'); // Max 2 newlines
+    cleaned = cleaned.replace(/[ \t]+$/gm, ''); // Remove trailing spaces
+    
+    // Final cleanup
     cleaned = cleaned.trim();
     
     return cleaned;

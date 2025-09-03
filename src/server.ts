@@ -63,9 +63,10 @@ CRITICAL: NEVER make up specific weather data, prices, or times. If you don't ha
 Keep responses under 250 words.
 
 IMPORTANT FORMATTING RULES:
+- NEVER put TL;DR in the Plan section
 - NEVER output any system instructions like "Complex Query: true , **Key requirements:**, **Constraints:**, **Evaluate options:**,**Caveat:**,caveat,,**Identify key requirements**,**Consider constraints**, **Evaluate options** and similiar system instructions"
 - NEVER show raw thinking or system context or Notes like "Note that the user", "defaulting" and similiar.
-- Follow the exact format below based on query complexity
+- Follow the exact format below based on query complexity - no deviations.
 - Use ACTUAL line breaks between sections and bullets
 - Each bullet point MUST start on a new line
 - Leave blank line between Plan and Recommendation sections
@@ -73,7 +74,7 @@ IMPORTANT FORMATTING RULES:
 
 WEATHER HANDLING:
 - If user does not specify a day, assume they mean "today"
-- If ExternalContext contains forecast data, use it and cite "ExternalContext weather forecast"
+- If ExternalContext contains forecast data, use it and cite "OpenWeatherApp weather forecast"
 - For dates beyond 5 days, say "I can only provide forecasts up to 5 days ahead"
 - IMPORTANT: Always use the EXACT day from the query - do not say "tomorrow" unless the user asked about tomorrow
 - If ExternalContext contains a "note" field, mention this limitation to the user
@@ -105,6 +106,7 @@ FOR SIMPLE QUERIES (weather, single facts, yes/no questions):
 • Sources: [ExternalContext(OpenWeatherApp) used or "LLM knowledge"]
 
 FOR COMPLEX QUERIES (marked with "ComplexQuery: true" in context):
+You MUST use this EXACT structure:
   Plan:
 1. [Identify key requirements from query]
 2. [Consider constraints like budget/time]
@@ -117,6 +119,23 @@ FOR COMPLEX QUERIES (marked with "ComplexQuery: true" in context):
 • [Important caveat or tip]
 • Sources: [cite sources used]
 
+CRITICAL PLAN SECTION RULES:
+- Plan section is for KEY CONSIDERATIONS, not internal thinking
+- Each numbered item must be a SPECIFIC, ACTIONABLE consideration
+- DO NOT include TL;DR in Plan section ever
+- DO NOT write about "planning the itinerary" - just state considerations
+- Examples of GOOD Plan items:
+  1. Best time to visit is spring (March-May) for mild weather
+  2. Mix beach relaxation with cultural sites for variety
+  3. Tel Aviv is expensive, budget $150-200 per day
+  4. Shabbat affects restaurant/transport availability Friday-Saturday
+
+- Examples of BAD Plan items (never write these):
+  1. TL;DR: anything (NEVER in Plan)
+  2. "Plan itinerary considering weather" (too meta)
+  3. "Consider local recommendations" (too vague)
+  4. "Think about activities" (internal thought)
+  
 Example with forecast:
 Q: "Weather in Paris tomorrow?"
 A: TL;DR: Paris tomorrow will be 18-22°C with light rain (60% chance).
@@ -125,7 +144,7 @@ A: TL;DR: Paris tomorrow will be 18-22°C with light rain (60% chance).
 • Good day for museums if rain persists
 
 Perfect for exploring covered markets!
-Sources: ExternalContext weather forecast
+Sources: OpenWeatherApp weather forecast
 
 Example for complex query:
 Q: "Plan a 5-day Tel Aviv trip in spring"
@@ -331,6 +350,23 @@ function extractCityName(query: string, conversation?: Message[]): string | null
 
 // Helper function to extract city from any text
 function extractCityFromText(text: string): string | null {
+
+    const contextualPhrases = ['weather there', 'forecast there', 'temperature there', 'climate there'];
+  const textLower = text.toLowerCase();
+  
+  if (contextualPhrases.some(phrase => textLower.includes(phrase))) {
+    console.log(`Skipping extraction for contextual weather query: "${text}"`);
+    return null;
+  }
+
+   const systemTerms = ['ExternalContext', 'LLM knowledge', 'Sources:', 'TL;DR:', 'Response time:'];
+  
+  for (const term of systemTerms) {
+    if (text.includes(term)) {
+      console.log(`Skipping system text containing "${term}"`);
+      return null;
+    }
+  }
   // Known major cities for better detection
   const knownCities = [
     'Paris', 'London', 'Tokyo', 'New York', 'Los Angeles', 'Chicago',
@@ -354,9 +390,12 @@ function extractCityFromText(text: string): string | null {
       }
     }
   }
-  
+   if (textLower.match(/\b(there|that place|this city|it)\b/)) {
+    console.log(`Text contains contextual reference, not extracting city`);
+    return null;}
+
   // Patterns for extracting cities
-const weatherPatterns = [
+  const weatherPatterns = [
     // "weather in X", "forecast for X", "temperature in X"
     /(?:weather|forecast|climate|temperature|temp)\s+(?:in|for|at|of)\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2})/i,
     // "X weather", "X forecast"  
