@@ -9,7 +9,7 @@
 
 
 **Sample Conversations:**
-**Continuity of City context ,API usage with proper day detection and default day,practical advice based on conditions**
+**1. Continuity of City context ,API usage with proper day detection and default day,practical advice based on conditions**
 YOU:
 plan 5 days holiday in tel aviv
 
@@ -68,7 +68,7 @@ TL;DR: Tomorrow's forecast in Tel Aviv looks mostly sunny with a high of 27°C (
 
 Sources: OpenWeatherApp weather forecast
 
-**Multi-day planning, preference extraction, structured,consistent output**
+**2. Multi-day planning, preference extraction, structured,consistent output**
 
 YOU: I want to plan a budget 4-day trip to Barcelona
 
@@ -112,7 +112,8 @@ ArticketBCN pass (€30) covers 6 major museums. Many veggie places near art dis
 
 Sources: LLM knowledge
 
-**Ambiguity resolution, graceful error recovery**
+**3. Ambiguity resolution, graceful error recovery**
+
 YOU: weather there?
 
 TRAVELGENIE:
@@ -136,7 +137,8 @@ YOU: plan trip to xyzabc123
 2. No budget/time constraints provided. Consider specifying a destination, dates, and any other relevant information to get a tailored plan.
 3. Multiple options exist for various destinations. With no additional context, it's challenging to evaluate the best fit.
 
-**Avoiding false precision and hallucination, citing sources correctly**
+**4. Avoiding false precision and hallucination, citing sources correctly**
+
 YOU: what's the typical hotel price in tokyo?
 
 TRAVELGENIE:
