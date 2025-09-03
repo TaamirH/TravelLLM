@@ -9,7 +9,9 @@
 
 
 **Sample Conversations:**
+
 **1. Continuity of City context ,API usage with proper day detection and default day,practical advice based on conditions**
+
 YOU:
 plan 5 days holiday in tel aviv
 
