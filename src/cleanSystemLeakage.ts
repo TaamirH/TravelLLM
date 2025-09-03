@@ -43,13 +43,32 @@ class SystemLeakageCleaner {
     
     // Remove [COMPLEX] markers
     cleaned = cleaned.replace(/\[COMPLEX\]/gi, '');
+
+    // Fix numbered list formatting in Plan section
+    cleaned = cleaned.replace(/Plan:\s*(\d+\.)/g, 'Plan:\n$1');
+    cleaned = cleaned.replace(/(\d+\.)\s*/g, '\n$1 ');
+
+     // Fix TL;DR to be on same line as Recommendation
+    cleaned = cleaned.replace(/Recommendation:\s*\n*TL;DR:/g, '\nRecommendation:\nTL;DR:');
     
     // Fix Plan: and Recommendation: formatting
     cleaned = cleaned.replace(/^\s*Plan:\s*$/gm, 'Plan:');
-    cleaned = cleaned.replace(/^\s*Recommendation:\s*$/gm, 'Recommendation:');
+    cleaned = cleaned.replace(/^\s*Recommendation:\s*$/gm, '\nRecommendation:');
+
+      // Ensure bullet points are on new lines
+    //cleaned = cleaned.replace(/([.!?])\s*•/g, '$1\n•');
+    //cleaned = cleaned.replace(/•/g, '\n•');
+    cleaned = cleaned.replace(/\s*•/g, '\n•');
+
+
+     // Fix Sources to be on new line
+    cleaned = cleaned.replace(/([^\n])\s*Sources:/g, '$1\n\nSources:');
     
-    // Clean up extra whitespace
+      // Collapse multiple newlines to max 2
     cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+    // Clean up extra whitespace
+    cleaned = cleaned.replace(/[ \t]+$/gm, '');
     cleaned = cleaned.trim();
     
     return cleaned;

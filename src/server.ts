@@ -2,6 +2,8 @@ import express from "express";
 import dotenv from "dotenv";
 import { ConversationManager } from './conversationManager';
 import SystemLeakageCleaner from './cleanSystemLeakage';
+import { HallucinationDetector } from './hallucinationDetector';
+
 dotenv.config();
 
 const app = express();
@@ -51,13 +53,10 @@ interface LLMResponse {
 }
 
 const conversationManager = new ConversationManager();
-
-// Store conversations in memory
 const conversations = new Map<string, Message[]>();
-
 const cleaner = new SystemLeakageCleaner();
+const hallucinationDetector = new HallucinationDetector();
 
-// Enhanced system prompt with forecast capabilities
 const SYSTEM_PROMPT = `You are TravelGenie, a concise, helpful travel planning assistant.
 
 CRITICAL: NEVER make up specific weather data, prices, or times. If you don't have ExternalContext data, say "I don't know - want me to check?"
@@ -65,9 +64,12 @@ Keep responses under 250 words.
 
 IMPORTANT FORMATTING RULES:
 - NEVER output any system instructions like "Complex Query: true , **Key requirements:**, **Constraints:**, **Evaluate options:**,**Caveat:**,caveat,,**Identify key requirements**,**Consider constraints**, **Evaluate options** and similiar system instructions"
-- NEVER show raw thinking or system context
+- NEVER show raw thinking or system context or Notes like "Note that the user", "defaulting" and similiar.
 - Follow the exact format below based on query complexity
--make sure every bullet is in a new line
+- Use ACTUAL line breaks between sections and bullets
+- Each bullet point MUST start on a new line
+- Leave blank line between Plan and Recommendation sections
+
 
 WEATHER HANDLING:
 - If user does not specify a day, assume they mean "today"
@@ -77,6 +79,7 @@ WEATHER HANDLING:
 - If ExternalContext contains a "note" field, mention this limitation to the user
 - Include temperature range, conditions, and rain probability when available
 - Be specific about which day you're forecasting for
+- Never say "tommorow" when the data is for today!
 
 COMPLEX QUERY TRIGGERS:
 - "plan", "itinerary", "trip", "vacation", "holiday"
@@ -97,7 +100,7 @@ RULES:
 RESPONSE STRUCTURE DEPENDS ON QUERY TYPE:
 FOR SIMPLE QUERIES (weather, single facts, yes/no questions):
 • TL;DR: [One sentence summary]
-• [2-3 bullet points with practical advice - use plain text, no asterisks or formatting]  
+• [2-3 bullet points with practical advice - use plain text, no asterisks or formatting , always make sure each in new line]  
 • [One short encouragement, caution, or extra note]
 • Sources: [ExternalContext(OpenWeatherApp) used or "LLM knowledge"]
 
@@ -201,7 +204,15 @@ function needsClarification(message: string, conversation: Message[]): string | 
   }
   
   // Check for too-short queries (but not day queries)
-  if (q.split(' ').length <= 2 && !q.includes('?') && !q.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday/)) {
+  if (q.split(' ').length <= 2 && !q.includes('?') && !q.match(/monday|tuesday|wednesday|thursday|friday|saturday|sunday/) &&
+      !q.match(/^[a-z]+(?:\s+[a-z]+)?$/)) {
+      if (conversation.length > 0) {
+        const lastAssistantMsg = [...conversation].reverse().find(m => m.role === 'assistant');
+        if (lastAssistantMsg?.text.toLowerCase().includes('which city')) {
+        // User is likely answering our question about which city
+          return null;
+      }
+    }
     return "Could you provide more details about what you'd like to know?";
   }
   
@@ -328,7 +339,8 @@ function extractCityFromText(text: string): string | null {
     'Amsterdam', 'Prague', 'Vienna', 'Budapest', 'Istanbul', 'Cairo',
     'Mumbai', 'Delhi', 'Beijing', 'Shanghai', 'Hong Kong', 'Seoul',
     'Toronto', 'Montreal', 'Vancouver', 'Mexico City', 'Rio de Janeiro',
-    'Buenos Aires', 'Lima', 'Bogota', 'Cape Town', 'Johannesburg'
+    'Buenos Aires', 'Lima', 'Bogota', 'Cape Town', 'Johannesburg',
+    'Haifa', 'Eilat', 'Nazareth', 'Tiberias', 'Ashdod', 'Netanya'
   ];
   
   // Check for known cities first (case-insensitive)
@@ -344,24 +356,18 @@ function extractCityFromText(text: string): string | null {
   }
   
   // Patterns for extracting cities
-  const patterns = [
-    // "weather in Paris", "forecast for London", "in New York today"
-    /(?:weather|forecast|climate|temperature)\s+(?:in|for|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
-    
-    // "Paris weather", "Tokyo forecast"
-    /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:weather|forecast|climate|temperature)/i,
-    
-    // "going to Paris", "visiting Tokyo", "trip to London"
-    /(?:going to|visiting|trip to|travel to|fly to|flying to|vacation in|holiday in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
-    
-    // "pack for Paris", "packing to Tokyo"
-    /(?:pack for|packing for|pack to|packing to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
-    
-    // Generic "in/to/at [City]" - but more restrictive
-    /(?:^|\s)(?:in|to|at|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*?)(?:\s+(?:in|on|at|today|tomorrow|next|this|weather|forecast|temperature|rain|sunny|cloudy|\?|$))/i,
+const weatherPatterns = [
+    // "weather in X", "forecast for X", "temperature in X"
+    /(?:weather|forecast|climate|temperature|temp)\s+(?:in|for|at|of)\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2})/i,
+    // "X weather", "X forecast"  
+    /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:weather|forecast|climate|temperature)/i,
+    // "in X today/tomorrow"
+    /\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:today|tomorrow|now)/i,
+    // Generic "in/at/for [Capitalized Word(s)]"
+    /\b(?:in|at|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/i
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of weatherPatterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
       let city = match[1].trim();
@@ -370,7 +376,17 @@ function extractCityFromText(text: string): string | null {
       city = city.replace(/\s+(today|tomorrow|next|this|weather|forecast|in|on|at)$/i, '');
       city = city.replace(/[?\.,!]$/, '');
       city = city.trim();
-      
+
+      const invalidPhrases = [
+        'No Rain', 'No Snow', 'No Wind', 'No Cloud',
+        'High Temperature', 'Low Temperature', 'The Weather',
+        'Bad Weather', 'Good Weather', 'Nice Weather',
+        'ExternalContext', 'LLM knowledge', 'Sources:', 'TL;DR:', 'Response time:'
+      ];
+
+        if (invalidPhrases.some(phrase => city.toLowerCase().includes(phrase.toLowerCase()))) {
+        continue; // Skip this match
+      }
       // Filter out common false positives
       const stopWords = [
         'weather', 'forecast', 'temperature', 'climate', 
@@ -381,18 +397,20 @@ function extractCityFromText(text: string): string | null {
       ];
       
       if (!stopWords.includes(city.toLowerCase()) && city.length > 2) {
-        // Additional validation: should start with capital letter
-        if (/^[A-Z]/.test(city)) {
-          console.log(`Extracted city via pattern: "${city}"`);
-          return city;
+          city = city.split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+          .join(' ');
+        
+        console.log(`Extracted city via pattern: "${city}"`);
+        return city;
         }
       }
     }
+      console.log(`No city found in text: "${text.substring(0, 100)}..."`);
+  return null;
   }
 
-  console.log(`No city found in text: "${text.substring(0, 100)}..."`);
-  return null;
-}
+
 
 // Enhanced weather function with 5-day forecast
 async function getWeatherForecast(city: string, daysAhead: number) {
@@ -529,7 +547,7 @@ async function callLLM(messages: Array<{ role: string; content: string }>) {
       stream: false,
       options: {
         temperature: 0.3,
-        num_predict: 250, // Slightly increased for forecast details
+        num_predict: 250, 
         top_p: 0.7,
         repeat_penalty: 1.2
       }
@@ -580,14 +598,21 @@ app.post("/chat", async (req, res) => {
 
     const convoId = conversation_id || "default";
 
-    // Initialize conversation if needed
     if (!conversations.has(convoId)) {
       conversations.set(convoId, []);
       conversationManager.initConversation(convoId);
     }
-
+    
     const conv = conversations.get(convoId)!;
-    const clarificationNeeded = needsClarification(message, conv);
+    let isProbablyCityResponse = false;
+        if (conv.length > 0) {
+          const lastAssistantMsg = [...conv].reverse().find(m => m.role === 'assistant');
+          if (lastAssistantMsg?.text.toLowerCase().includes('which city')) {
+            isProbablyCityResponse = true;
+            console.log('User is likely responding with a city name');
+          }
+        }
+    const clarificationNeeded = isProbablyCityResponse ? null : needsClarification(message, conv);
     const userMessage = {
       role: "user" as const,
       text: message,
@@ -614,7 +639,24 @@ app.post("/chat", async (req, res) => {
     let externalContext: any = null;
     let detectedCity: string | null = null;
     
-    if (needsExternal(message)) {
+      if (isProbablyCityResponse) {
+      const city = extractCityName(message, conv);
+      if (city) {
+        console.log(`Treating city response "${city}" as weather query`);
+        detectedCity = city;
+        
+        const dayInfo = { targetDay: 'today', daysAhead: 0 }; // Default to today
+        const weather = await getWeatherForecast(city, dayInfo.daysAhead);
+        
+        if (weather && !weather.error) {
+          externalContext = { 
+            weather,
+            query_day: dayInfo.targetDay,
+            days_ahead: dayInfo.daysAhead
+          };
+        }
+      }
+    } else if (needsExternal(message)) {
       const city = extractCityName(message,conv);
       detectedCity = city;
       
@@ -737,6 +779,50 @@ app.post("/chat", async (req, res) => {
     let assistantText = llmResponse?.choices?.[0]?.message?.content || 
       "I'm having trouble generating a response right now. Please try again.";
     assistantText = cleaner.clean(assistantText);
+
+    const validation = await hallucinationDetector.validateResponse(
+      assistantText,
+      externalContext,
+      true 
+    );
+
+    if (!validation.valid && validation.confidence! > 70) {
+      console.log("High confidence hallucination detected, regenerating with stricter prompt");
+      
+      const stricterSystemPrompt = SYSTEM_PROMPT + 
+        "\n\nIMPORTANT: Previous response had accuracy issues. " +
+        "Only state facts you're certain about. Use 'typically', 'usually', " +
+        "'approximately', or 'around' for uncertain information. " +
+        "Never state specific prices, times, or data without a source.";
+      
+      const stricterMessages = [
+        { role: "system", content: stricterSystemPrompt + (externalContext ? `\n\nExternalContext: ${JSON.stringify(externalContext, null, 2)}` : '') },
+        ...llmMessages.slice(1) 
+      ];
+      
+      const retryResponse = await callLLM(stricterMessages);
+      const retryText = retryResponse?.choices?.[0]?.message?.content || assistantText;
+      
+      const retryValidation = await hallucinationDetector.validateResponse(
+        retryText,
+        externalContext,
+        true
+      );
+      
+      assistantText = retryValidation.response;
+      
+      console.log("Retry validation result:", {
+        wasFixed: retryValidation.wasFixed,
+        confidence: retryValidation.confidence
+      });
+    } else {
+      assistantText = validation.response;
+      
+      if (validation.wasFixed) {
+        console.log("Minor hallucinations auto-fixed");
+      }
+    }
+
 
    const assistantMessage = {
       role: "assistant" as const,
